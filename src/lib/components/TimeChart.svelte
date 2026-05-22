@@ -10,6 +10,10 @@
 
   CSS-variable color values can't be used directly in canvas, so we
   resolve them once at mount via getComputedStyle.
+
+  Inline legend: a small floating chip cluster in the top-right corner
+  shows one dot+label per series. Pointer-events disabled so it doesn't
+  intercept chart interaction.
 -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
@@ -19,20 +23,13 @@
   interface SeriesDef { label: string; color: string }
 
   interface Props {
-    /** Shared X-axis (seconds, relative). Pre-allocated; only [0..count) is valid. */
     xs: Float64Array;
-    /** One Y buffer per series, same length as xs. */
     ys: Float64Array[];
-    /** Labels and colors for each Y series. Color may be a CSS var or hex. */
     seriesDefs: SeriesDef[];
-    /** Number of valid samples (writes the [0..count) slice). */
     count: number;
-    /** Visible X-axis window in seconds (left = right − windowSec). */
     windowSec: number;
-    /** Optional fixed Y range. If both null, uPlot auto-scales. */
     yMin?: number | null;
     yMax?: number | null;
-    /** Optional Y-axis label. */
     yLabel?: string;
   }
 
@@ -45,18 +42,15 @@
   let plot: uPlot | null = null;
   let frame = 0;
 
-  /**
-   * Resolve a CSS variable name (or "var(--name)" string) to its concrete
-   * color value at the current root computed style. Canvas needs literal
-   * colors, not CSS variables.
-   */
   function resolveColor(value: string): string {
     if (!value.startsWith('var(')) return value;
     const name = value.slice(4, -1).trim();
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
   }
 
-  /** Build the uPlot options object based on the props at mount time. */
+  /** Resolved colors (literal hex) for the inline legend dots. */
+  let resolvedColors = $derived(seriesDefs.map((s) => resolveColor(s.color)));
+
   function makeOpts(w: number, h: number): uPlot.Options {
     const axisColor = resolveColor('var(--fg-secondary)');
     const gridColor = resolveColor('var(--grid)');
@@ -66,7 +60,7 @@
       height: h,
       pxAlign: 0,
       cursor: { show: false },
-      legend: { show: false },
+      legend: { show: false },   // we render our own HTML legend overlay
       scales: {
         x: { time: false, auto: false },
         y: { auto: yMin === null || yMax === null }
@@ -99,7 +93,6 @@
     };
   }
 
-  /** Build the data array uPlot expects from the current slices. */
   function buildData(): uPlot.AlignedData {
     if (count === 0) {
       return [new Float64Array(1), ...ys.map(() => new Float64Array(1))] as unknown as uPlot.AlignedData;
@@ -116,8 +109,6 @@
     });
     ro.observe(container);
 
-    // RAF render loop, throttled to ~30 fps. Updates data, scrolls the X-axis
-    // window so the latest sample is always at the right edge.
     let last = 0;
     const loop = (t: number) => {
       frame = requestAnimationFrame(loop);
@@ -141,14 +132,57 @@
   onDestroy(() => { plot?.destroy(); plot = null; });
 </script>
 
-<div bind:this={container} class="chart"></div>
+<div class="time-chart-wrap">
+  <div bind:this={container} class="chart"></div>
+  {#if seriesDefs.length > 0}
+    <div class="legend" aria-hidden="true">
+      {#each seriesDefs as s, i}
+        <span class="chip">
+          <span class="chip-dot" style:background={resolvedColors[i]}></span>{s.label}
+        </span>
+      {/each}
+    </div>
+  {/if}
+</div>
 
 <style>
-  .chart {
+  .time-chart-wrap {
+    position: relative;
     width: 100%;
     height: 100%;
     min-height: 140px;
-    position: relative;
+  }
+  .chart {
+    width: 100%;
+    height: 100%;
+  }
+  .legend {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    display: flex;
+    gap: 6px;
+    pointer-events: none;
+    padding: 3px 6px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bg-elev) 78%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--fg-secondary);
+    z-index: 2;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .chip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
   }
   :global(.uplot, .uplot *) {
     font-family: var(--mono) !important;

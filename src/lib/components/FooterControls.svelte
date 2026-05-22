@@ -1,25 +1,17 @@
 <!--
   FooterControls
   ==============
-  iOS-style toolbar pinned to the bottom of the page content (sits above
-  the global tab bar in the layout). Houses the per-module action buttons:
+  Bottom toolbar with the per-module actions: Start/Stop, Reset, Log, CSV.
 
-    [ Start/Stop ]  [ Reset KPI ]  [ Rec/Stop ]  [ Export CSV ]
+  Layout: all four buttons share the same height (44 pt — iOS touch
+  target). The primary action (Start ↔ Stop) takes a bit more horizontal
+  space and uses filled / destructive styling. Secondary actions use the
+  tinted style. The Log button switches to a recording style with a
+  pulsing dot when a session is active.
 
-  Conventions:
-  - The primary action (Start ↔ Stop) is a filled iOS pill button. When
-    running, it switches to a destructive (red) "Stop" to follow the iOS
-    convention of "destructive primary action".
-  - The other three are tinted/plain buttons. They're disabled when the
-    matching state is invalid (e.g. you can't reset KPIs when not running).
-  - Logging is disabled when the active module is "audio" (per app spec:
-    audio is visualization-only). The disabled-state tooltip explains why.
-
-  Implementation notes:
-  - The "Export CSV" button finds the most recent finished session for
-    THIS module and triggers a download. Cross-module CSVs are not mixed.
-  - The toolbar respects safe-area-inset-bottom indirectly via the parent
-    layout, which adds the inset to the tab bar (the controls sit on top).
+  Previously the secondary buttons used `btn-small` (32 pt) which made
+  them visibly shorter than the primary — looked unbalanced and was
+  under the iOS recommended touch-target. Now all are 44 pt.
 -->
 <script lang="ts">
   import { sessionState, startLogging, stopLogging } from '$lib/stores/session';
@@ -45,11 +37,6 @@
   const canLog = $derived(module !== 'audio');
   const logging = $derived($sessionState.active && $sessionState.module === module);
 
-  /**
-   * Toggle logging on/off. If the sensor controller isn't running yet,
-   * starts it first — this matches the natural mental model of "tap Log
-   * → it starts recording" without an extra Start step.
-   */
   async function toggleLog() {
     if (logging) {
       await stopLogging();
@@ -59,10 +46,6 @@
     }
   }
 
-  /**
-   * Find the most recent session for this module and download it as CSV.
-   * Shows a native alert if no session exists yet.
-   */
   async function exportLast() {
     if (!canLog) return;
     const last = await db.sessions
@@ -79,14 +62,14 @@
 
 <div class="toolbar" role="toolbar" aria-label="Module controls">
   <button
-    class={running ? 'btn-destructive' : 'btn-filled'}
+    class="primary {running ? 'btn-destructive' : 'btn-filled'}"
     onclick={() => running ? onStop() : onStart()}
   >
     {running ? 'Stop' : 'Start'}
   </button>
 
   <button
-    class="btn-tinted btn-small"
+    class="secondary btn-tinted"
     onclick={onResetKpi}
     disabled={!running}
   >
@@ -94,16 +77,20 @@
   </button>
 
   <button
-    class={logging ? 'btn-warn btn-small' : 'btn-tinted btn-small'}
+    class="secondary {logging ? 'btn-rec' : 'btn-tinted'}"
     onclick={toggleLog}
     disabled={!canLog}
     title={canLog ? '' : 'Logging not available for Audio module'}
   >
-    {logging ? '● Rec' : 'Log'}
+    {#if logging}
+      <span class="rec-dot" aria-hidden="true"></span>Rec
+    {:else}
+      Log
+    {/if}
   </button>
 
   <button
-    class="btn-tinted btn-small"
+    class="secondary btn-tinted"
     onclick={exportLast}
     disabled={!canLog}
   >
@@ -115,17 +102,50 @@
   .toolbar {
     display: flex;
     gap: 8px;
-    align-items: center;
+    align-items: stretch;
     padding: 10px 16px;
     background: var(--bg-elev);
     border-top: 0.5px solid var(--separator);
-    /* primary action takes more space */
-  }
-  .toolbar > button:first-child {
-    flex: 2 1 0;
   }
   .toolbar > button {
     flex: 1 1 0;
     min-width: 0;
+    /* Unify height across all buttons (was inconsistent: filled=44, small=32) */
+    min-height: 40px;
+    padding: 9px 10px;
+    font-size: var(--t-subhead);
+    font-weight: 600;
+    border-radius: var(--r-button);
+    /* Allow ellipsis if extremely cramped, but normally text fits */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Primary action takes more space */
+  .toolbar > button.primary {
+    flex: 1.6 1 0;
+    font-size: var(--t-body);
+  }
+
+  .btn-rec {
+    background: var(--warn);
+    color: #ffffff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .rec-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: #ffffff;
+    border-radius: 50%;
+    animation: rec-pulse 1.1s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes rec-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
   }
 </style>

@@ -7,6 +7,8 @@
 
   Like TimeChart, CSS variable colors are resolved to literal values at
   mount time so canvas2D understands them.
+
+  Inline legend in the top-right corner matches TimeChart's style.
 -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
@@ -16,23 +18,14 @@
   interface SeriesDef { label: string; color: string }
 
   interface Props {
-    /** Bin-center frequencies in Hz. */
     freqs: Float32Array;
-    /** Magnitude or dB array per series, same length as `freqs`. */
     spectra: Float32Array[];
-    /** One label + color per series. */
     seriesDefs: SeriesDef[];
-    /** Use logarithmic Y axis (dB) vs linear magnitude. */
     logY: boolean;
-    /** Use logarithmic X axis (frequency). */
     logX: boolean;
-    /** Fixed Y minimum (used only when autoScale is false). */
     yMin?: number;
-    /** Fixed Y maximum. */
     yMax?: number;
-    /** If true, ignore yMin/yMax and let uPlot pick. */
     autoScale: boolean;
-    /** Optional Y-axis label. */
     yLabel?: string;
   }
 
@@ -46,18 +39,19 @@
   let plot: uPlot | null = null;
   let frame = 0;
 
-  /** Resolve CSS variable to literal color value. See TimeChart for rationale. */
   function resolveColor(value: string): string {
     if (!value.startsWith('var(')) return value;
     const name = value.slice(4, -1).trim();
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
   }
 
+  let resolvedColors = $derived(seriesDefs.map((s) => resolveColor(s.color)));
+
   function makeOpts(w: number, h: number): uPlot.Options {
     const axisColor = resolveColor('var(--fg-secondary)');
     const gridColor = resolveColor('var(--grid)');
     const tickColor = resolveColor('var(--separator)');
-    void logY;
+    void logY; // dB conversion happens in the parent; flag kept for API symmetry
     return {
       width: w,
       height: h,
@@ -65,8 +59,6 @@
       cursor: { show: true, x: true, y: false },
       legend: { show: false },
       scales: {
-        // uPlot scale distribution: 1=linear, 3=log. Y log-axis is handled
-        // by feeding dB values (precomputed elsewhere), not via scale.distr.
         x: { time: false, distr: logX ? 3 : 1 },
         y: { auto: autoScale, distr: 1 }
       },
@@ -110,7 +102,6 @@
     });
     ro.observe(container);
 
-    // 20 fps refresh is plenty for spectrum display
     let last = 0;
     const loop = (t: number) => {
       frame = requestAnimationFrame(loop);
@@ -128,10 +119,58 @@
   onDestroy(() => { plot?.destroy(); plot = null; });
 </script>
 
-<div bind:this={container} class="chart"></div>
+<div class="fft-chart-wrap">
+  <div bind:this={container} class="chart"></div>
+  {#if seriesDefs.length > 0}
+    <div class="legend" aria-hidden="true">
+      {#each seriesDefs as s, i}
+        <span class="chip">
+          <span class="chip-dot" style:background={resolvedColors[i]}></span>{s.label}
+        </span>
+      {/each}
+    </div>
+  {/if}
+</div>
 
 <style>
-  .chart { width: 100%; height: 100%; min-height: 160px; }
+  .fft-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 160px;
+  }
+  .chart {
+    width: 100%;
+    height: 100%;
+  }
+  .legend {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    display: flex;
+    gap: 6px;
+    pointer-events: none;
+    padding: 3px 6px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bg-elev) 78%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--fg-secondary);
+    z-index: 2;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .chip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
   :global(.uplot, .uplot *) {
     font-family: var(--mono) !important;
     font-size: 10px !important;

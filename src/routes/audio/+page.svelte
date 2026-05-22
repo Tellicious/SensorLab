@@ -1,16 +1,19 @@
 <!--
   Audio module page.
 
-  Provides live mic visualization with no logging (by design):
-  - Waveform (Float32 time-domain block from AnalyserNode)
-  - Spectrum (FFT magnitude in dB, weighted Z/A/C per settings)
-  - Calibration strip showing current method, offset, and a Re-calibrate button
-  - KPIs: Peak, RMS, Leq — all in dBFS or dB SPL depending on calibration state
-  - Dominant frequencies list
+  Provides live mic visualization with no logging (by design).
 
-  Why no logging: long-form audio capture (raw samples or downsampled
-  spectrum) at 48 kHz is several MB/minute and quickly hits iOS IndexedDB
-  quota. Audio readings here are live-only.
+  Reactivity fix (same as Motion page): the KPI grid was previously
+  wrapped in {#key tick} where `tick` was incremented at RAF rate
+  (~60 Hz). That destroyed and recreated every KPI card on every audio
+  frame, which:
+  - Made the page visibly jump as values changed width
+  - Cancelled tap events on the toolbar when a click landed mid-rebuild
+  - Created a huge amount of GC pressure
+
+  Now the cards are mounted once and only their `value` props change.
+  The dB-display $derived expressions already depend on `tick`, so the
+  values still refresh — without any remounting.
 -->
 <script lang="ts">
   import { onDestroy } from 'svelte';
@@ -42,11 +45,8 @@
   let weightOff = $state(new Float32Array(1));
 
   let dominant = $state<Array<{ freq: number; mag: number }>>([]);
-  // Plain class instances (not $state) — re-render via the `tick` counter
   let peakTracker = new PeakTracker();
   let rmsTracker = new RollingRms(48000, 1);
-  // Running Leq accumulator. Stored as linear power sum + count so that
-  // each new frame just adds and re-divides — true equivalent level.
   let leqSum = 0, leqCount = 0;
   let leqDbfs = $state(-200);
 
@@ -54,10 +54,6 @@
   let tick = $state(0);
   let rafId = 0;
 
-  /**
-   * (Re)allocate every buffer that depends on fftSize and sampleRate.
-   * Called on Start and whenever fftSize changes mid-stream.
-   */
   function ensureBuffers(size: number, rate: number) {
     bins = size / 2;
     freqs = new Float32Array(bins);
@@ -71,10 +67,6 @@
     weightOff = weightingOffsets(freqs, $settings.audio.weighting);
   }
 
-  /**
-   * Start mic acquisition. Triggers the iOS permission prompt the first
-   * time. Must be called from a user-gesture handler.
-   */
   async function start() {
     if (running) return;
     ctrl = await createAudioController($settings.audio.fftSize);
@@ -94,19 +86,12 @@
     if (ctrl) { await ctrl.stop(); ctrl = null; }
   }
 
-  /**
-   * Main render loop: every RAF tick, pull time and frequency data from
-   * the AnalyserNode, update KPIs, integrate Leq, find dominants. Throttled
-   * to RAF; uPlot charts have their own ~30 fps cap internally.
-   */
   function loop() {
     if (!running || !ctrl) return;
     ctrl.getTimeDomain(timeBuf);
     ctrl.getFrequencyMag(mag);
-    // mag → dB
     for (let k = 0; k < bins; k++) db[k] = mag[k] > 1e-12 ? 20 * Math.log10(mag[k]) : -200;
     applyWeightingDb(db, weightOff, dbWeighted);
-    // Per-block peak and RMS
     let p = 0, sumSq = 0;
     for (let i = 0; i < timeBuf.length; i++) {
       const v = timeBuf[i];
@@ -116,7 +101,6 @@
     peakTracker.push(p);
     const tNow = performance.now();
     rmsTracker.push(Math.sqrt(sumSq / timeBuf.length), tNow);
-    // Leq accumulation
     const bbDb = weightedBroadbandDb(mag, weightOff);
     if (isFinite(bbDb)) {
       leqSum += Math.pow(10, bbDb / 10);
@@ -147,14 +131,15 @@
   onDestroy(stop);
 
   // ---- Derived display values (with calibration) ----------------------
+  // These $derived expressions read `tick` to force re-evaluation each
+  // RAF frame, without remounting any DOM. KpiCard receives changed prop
+  // values and updates only its text content.
   const calOffset = $derived($settings.audio.calibration.offsetDb);
-  /** Pick the right unit label based on calibration state + weighting. */
   const dbUnit = $derived(
     $settings.audio.calibration.method === 'none' ? 'dBFS' :
     $settings.audio.weighting === 'A' ? 'dB(A)' :
     $settings.audio.weighting === 'C' ? 'dB(C)' : 'dB SPL'
   );
-  // Force re-eval when tick changes — peakTracker/rmsTracker aren't reactive
   const peakDb = $derived.by(() => {
     void tick;
     return peakTracker.peak > 0 ? 20 * Math.log10(peakTracker.peak) + calOffset : -200;
@@ -163,17 +148,12 @@
     void tick;
     return rmsTracker.rms > 0 ? 20 * Math.log10(rmsTracker.rms) + calOffset : -200;
   });
-  /**
-   * Crest factor in dB: peak/RMS expressed in decibels.
-   * Pure-tone sine: 3 dB · sawtooth: ~5 dB · pink noise: ~12 dB ·
-   * music: 12–20 dB · transients (snare): up to ~30 dB.
-   * Useful as a quick proxy for how transient-rich the signal is.
-   */
   const crestDb = $derived.by(() => {
     void tick;
     if (rmsTracker.rms <= 0 || peakTracker.peak <= 0) return 0;
     return 20 * Math.log10(peakTracker.peak / rmsTracker.rms);
   });
+  const leqDisplay = $derived(leqDbfs + calOffset);
 
   function applyCal(v: number) { return isFinite(v) ? v + calOffset : v; }
 </script>
@@ -188,7 +168,6 @@
     </span>
   </div>
 
-  <!-- Calibration strip — surfaces current state + Re-cal action -->
   <section class="card calib-strip">
     <div class="grow">
       <div class="footnote">Reference</div>
@@ -207,18 +186,15 @@
     </button>
   </section>
 
-  <!-- KPI grid -->
+  <!-- KPI grid -- NOTE: no {#key}. Cards persist; values update via $derived. -->
   <p class="section-header">Levels</p>
-  {#key tick}
   <section class="kpi-grid">
-    <KpiCard label="Peak"  value={peakDb} unit={dbUnit} big accent onReset={() => peakTracker.reset()} />
-    <KpiCard label="RMS"   value={rmsDb}  unit={dbUnit} onReset={() => rmsTracker.reset()} />
-    <KpiCard label="Leq"   value={leqDbfs + calOffset} unit={dbUnit} onReset={resetKpi} />
-    <KpiCard label="Crest" value={crestDb} unit="dB" onReset={resetKpi} />
+    <KpiCard label="Peak"  value={peakDb}     unit={dbUnit} big accent onReset={() => peakTracker.reset()} />
+    <KpiCard label="RMS"   value={rmsDb}      unit={dbUnit} onReset={() => rmsTracker.reset()} />
+    <KpiCard label="Leq"   value={leqDisplay} unit={dbUnit} onReset={resetKpi} />
+    <KpiCard label="Crest" value={crestDb}    unit="dB"     onReset={resetKpi} />
   </section>
-  {/key}
 
-  <!-- WAVEFORM (optional, toggled in Settings → Audio → display) -->
   {#if $settings.audio.showWaveform}
     <p class="section-header">Waveform</p>
     <section class="card chart-card">
@@ -249,7 +225,6 @@
     </section>
   {/if}
 
-  <!-- SPECTRUM (optional) -->
   {#if $settings.audio.showSpectrum}
     <p class="section-header">Spectrum</p>
     <section class="card chart-card">
@@ -297,7 +272,6 @@
     </section>
   {/if}
 
-  <!-- SPECTROGRAM (optional, scrolling waterfall) -->
   {#if $settings.audio.showSpectrogram}
     <p class="section-header">Spectrogram</p>
     <section class="card chart-card">
@@ -325,7 +299,6 @@
     </section>
   {/if}
 
-  <!-- DOMINANT -->
   <p class="section-header">Dominant frequencies · N = {$settings.audio.dominantFreqCount}</p>
   <section class="list-group" style="margin: 0 16px 16px">
     {#each dominant as d, i}
