@@ -24,10 +24,9 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { settings } from '$lib/stores/settings';
-  import { pushAudio } from '$lib/stores/session';
   import { createAudioController, type AudioController } from '$lib/sensors/audio';
-  import { applyWeighting } from '$lib/dsp/weighting';
-  import { dominantFrequencies } from '$lib/dsp/spectrum';
+  import { weightingOffsets, applyWeightingDb } from '$lib/dsp/weighting';
+  import { dominantFrequencies } from '$lib/dsp/fft';
   import { RollingRms, PeakTracker } from '$lib/dsp/kpi';
   import KpiCard from '$lib/components/KpiCard.svelte';
   import TimeChart from '$lib/components/TimeChart.svelte';
@@ -49,6 +48,8 @@
   let dbWeighted = $state(new Float32Array(1));      // after Z/A/C weighting
   let dbSmoothed = $state(new Float32Array(1));      // EMA of dbWeighted (for damped dominants)
   let freqs = $state(new Float32Array(1));
+  // Pre-computed weighting offsets per bin (depends on weighting type + freqs)
+  let weightOff = new Float32Array(1);
 
   function ensureBuffers(fftSize: number, sr: number) {
     if (timeBuf.length !== fftSize) {
@@ -64,8 +65,15 @@
       dbSmoothed = new Float32Array(bins);
       freqs = new Float32Array(bins);
       for (let i = 0; i < bins; i++) freqs[i] = (i * sr) / fftSize;
+      weightOff = weightingOffsets(freqs, $settings.audio.weighting);
     }
   }
+
+  // Recompute weight offsets when the user changes weighting (Z/A/C)
+  $effect(() => {
+    void $settings.audio.weighting;
+    if (freqs.length > 1) weightOff = weightingOffsets(freqs, $settings.audio.weighting);
+  });
 
   // ---- KPIs -----------------------------------------------------------
   let peakTracker = new PeakTracker();
@@ -110,7 +118,7 @@
 
     // dB-weighted spectrum
     ctrl.getFrequencyDataDb(dbRaw);
-    applyWeighting(dbRaw, dbWeighted, freqs, $settings.audio.weighting);
+    applyWeightingDb(dbRaw, weightOff, dbWeighted);
 
     // Equivalent continuous level: integrate weighted power over time
     let pSum = 0; let pCount = 0;
@@ -127,14 +135,10 @@
     for (let i = 0; i < dbWeighted.length; i++) {
       dbSmoothed[i] = α * dbSmoothed[i] + (1 - α) * dbWeighted[i];
     }
-    dominants = dominantFrequencies(dbSmoothed, sampleRate, $settings.audio.dominantFreqCount);
+    dominants = dominantFrequencies(dbSmoothed, freqs, $settings.audio.dominantFreqCount);
 
-    pushAudio({
-      t: Math.floor(performance.now()),
-      peakDb: isFinite(peakDb)  ? peakDb  : -120,
-      rmsDb:  isFinite(rmsDb)   ? rmsDb   : -120,
-      leqDb:  isFinite(leqDisplay) ? leqDisplay : -120
-    });
+    // Note: audio is visualization-only by design — no logging to IndexedDB.
+    // Raw audio at 48 kHz would saturate the storage quota in minutes.
 
     tick++;
     rafId = requestAnimationFrame(loop);

@@ -39,8 +39,7 @@
     type MotionSample
   } from '$lib/sensors/motion';
   import { ChannelStats } from '$lib/dsp/kpi';
-  import { FftProcessor, type FftSize } from '$lib/dsp/fft';
-  import { dominantFrequencies } from '$lib/dsp/spectrum';
+  import { FftProcessor, dominantFrequencies, type FftSize } from '$lib/dsp/fft';
   import KpiCard from '$lib/components/KpiCard.svelte';
   import TimeChart from '$lib/components/TimeChart.svelte';
   import FftChart from '$lib/components/FftChart.svelte';
@@ -113,6 +112,8 @@
   // so push/process mutations don't trigger Svelte invalidation each call.
   let fft = $state.raw<FftProcessor | null>(null);
   let fftMag = new Float32Array(1);
+  let fftDb = new Float32Array(1);
+  let fftFrame = new Float32Array(1);
   let fftMagSmoothed = new Float32Array(1);
   let dominants = $state<{ freq: number; mag: number }[]>([]);
 
@@ -127,7 +128,9 @@
         sampleRate: rate
       });
       fftMag = new Float32Array(fft.bins);
+      fftDb  = new Float32Array(fft.bins);
       fftMagSmoothed = new Float32Array(fft.bins);
+      fftFrame = new Float32Array(fft.size);
     }
   }
 
@@ -138,14 +141,12 @@
     const n = Math.min(count, fft.size);
     if (n < 8) return;
     const start = (count >= fft.size) ? count - fft.size : 0;
-    const slice = src.subarray(start, start + n);
-    // Zero-pad if buffer not yet full
-    const buf = n === fft.size ? slice : (() => {
-      const b = new Float64Array(fft!.size);
-      b.set(slice);
-      return b;
-    })();
-    fft.process(buf, fftMag);
+    // FftProcessor.compute() takes a Float32Array. Copy from the F64
+    // buffer into our pre-allocated Float32 frame; zero-pad the rest
+    // if we don't yet have a full window of samples.
+    fftFrame.fill(0);
+    for (let i = 0; i < n; i++) fftFrame[i] = src[start + i];
+    fft.compute(fftFrame, fftMag, fftDb);
 
     // Exponential moving average for damping
     const α = Math.max(0, Math.min(0.99, $settings.motion.dominantSmoothing));
@@ -155,7 +156,7 @@
 
     dominants = dominantFrequencies(
       fftMagSmoothed,
-      fft.sampleRate,
+      fft.freqs,
       $settings.motion.dominantFreqCount
     );
   }
@@ -169,9 +170,9 @@
     if (count < CAP) {
       xs[count] = tSec;
       ax[count] = s.ax; ay[count] = s.ay; az[count] = s.az; am[count] = mag;
-      rx[count] = s.rx; ry[count] = s.ry; rz[count] = s.rz;
+      rx[count] = s.axg; ry[count] = s.ayg; rz[count] = s.azg;
       gx[count] = s.gx; gy[count] = s.gy; gz[count] = s.gz;
-      oa[count] = s.alpha ?? 0; ob[count] = s.beta ?? 0; og[count] = s.gamma ?? 0;
+      oa[count] = s.ox; ob[count] = s.oy; og[count] = s.oz;
       count++;
     } else {
       // Slide all buffers left by 1
@@ -183,9 +184,9 @@
       const i = CAP - 1;
       xs[i] = tSec;
       ax[i] = s.ax; ay[i] = s.ay; az[i] = s.az; am[i] = mag;
-      rx[i] = s.rx; ry[i] = s.ry; rz[i] = s.rz;
+      rx[i] = s.axg; ry[i] = s.ayg; rz[i] = s.azg;
       gx[i] = s.gx; gy[i] = s.gy; gz[i] = s.gz;
-      oa[i] = s.alpha ?? 0; ob[i] = s.beta ?? 0; og[i] = s.gamma ?? 0;
+      oa[i] = s.ox; ob[i] = s.oy; og[i] = s.oz;
     }
 
     statsM.push(mag,  s.t);
@@ -203,11 +204,10 @@
 
     pushMotion({
       t: Math.floor(s.t - t0),
-      ax: s.ax, ay: s.ay, az: s.az,
-      rx: s.rx, ry: s.ry, rz: s.rz,
-      gx: s.gx, gy: s.gy, gz: s.gz,
-      mag,
-      alpha: s.alpha, beta: s.beta, gamma: s.gamma
+      ax: s.ax,   ay: s.ay,   az: s.az,
+      axg: s.axg, ayg: s.ayg, azg: s.azg,
+      gx: s.gx,   gy: s.gy,   gz: s.gz,
+      ox: s.ox,   oy: s.oy,   oz: s.oz
     });
   }
 
@@ -480,7 +480,7 @@
     <div class="chart-host">
       {#if fft}
         <FftChart
-          freqs={fft.frequencies}
+          freqs={fft.freqs}
           spectra={[fftMagSmoothed]}
           seriesDefs={[{ label: '|a|', color: 'var(--series-4)' }]}
           logX={$settings.motion.fftFreqLog}
