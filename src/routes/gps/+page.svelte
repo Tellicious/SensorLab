@@ -473,33 +473,37 @@
   {#if $settings.gps.showTimeCharts}
     <p class="section-header">Speed over time</p>
     <section class="card chart-card">
-      <div class="chart-host" style="height: 140px">
+      <div class="chart-host" style="height: 220px">
         <TimeChart
           {xs} ys={[ySpeed]}
           seriesDefs={[{ label: 'speed', color: 'var(--series-2)' }]}
           {count}
           windowSec={Math.max(60, count > 0 ? xs[count-1] : 60)}
           yLabel="m/s"
+          smoothingSamples={$settings.global.chartSmoothingSamples}
+          fullscreenTitle="Speed over time"
         />
       </div>
     </section>
 
     <p class="section-header">Altitude over time</p>
     <section class="card chart-card">
-      <div class="chart-host" style="height: 140px">
+      <div class="chart-host" style="height: 220px">
         <TimeChart
           {xs} ys={[yAlt]}
           seriesDefs={[{ label: 'alt', color: 'var(--series-1)' }]}
           {count}
           windowSec={Math.max(60, count > 0 ? xs[count-1] : 60)}
           yLabel={unitLabel('altitude', $settings.global.units)}
+          smoothingSamples={$settings.global.chartSmoothingSamples}
+          fullscreenTitle="Altitude over time"
         />
       </div>
     </section>
 
     <p class="section-header">Heading over time</p>
     <section class="card chart-card">
-      <div class="chart-host" style="height: 140px">
+      <div class="chart-host" style="height: 220px">
         <TimeChart
           {xs} ys={[yHeading]}
           seriesDefs={[{ label: 'heading', color: 'var(--series-3)' }]}
@@ -507,6 +511,8 @@
           windowSec={Math.max(60, count > 0 ? xs[count-1] : 60)}
           yMin={0} yMax={360}
           yLabel="°"
+          smoothingSamples={$settings.global.chartSmoothingSamples}
+          fullscreenTitle="Heading over time"
         />
       </div>
     </section>
@@ -523,7 +529,12 @@
     background: var(--bg-grouped);
     -webkit-overflow-scrolling: touch;
   }
-  .status-strip { display: flex; align-items: center; gap: 8px; padding: 0 16px 12px; }
+  .status-strip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 16px 6px;
+    font-size: var(--t-footnote);
+    color: var(--fg-tertiary);
+  }
   .banner {
     margin: 8px 16px;
     padding: 12px 16px;

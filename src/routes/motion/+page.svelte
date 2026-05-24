@@ -58,7 +58,7 @@
   const rx = new Float64Array(CAP), ry = new Float64Array(CAP), rz = new Float64Array(CAP);
   const gx = new Float64Array(CAP), gy = new Float64Array(CAP), gz = new Float64Array(CAP);
   const oa = new Float64Array(CAP), ob = new Float64Array(CAP), og = new Float64Array(CAP);
-  let count = 0;
+  let count = $state(0);
   let t0 = 0;
   let lastSampleT = 0;
   let lastSnapshotT = 0;
@@ -107,14 +107,15 @@
   }
 
   // ---- FFT (reactive flag fixes the "tap Start" placeholder) ----------
-  // $state.raw: reassignment IS reactive (so `{#if fft}` flips after
-  // `ensureFft()` builds the processor), but the deep proxy is skipped
-  // so push/process mutations don't trigger Svelte invalidation each call.
   let fft = $state.raw<FftProcessor | null>(null);
   let fftMag = new Float32Array(1);
   let fftDb = new Float32Array(1);
   let fftFrame = new Float32Array(1);
-  let fftMagSmoothed = new Float32Array(1);
+  /** Smoothed dB spectrum used for both the chart AND dominant detection.
+      Smoothing in dB (not linear) matches the chart's display range
+      (-120..0 dB) so the rendered values fit inside `yMin/yMax`. */
+  let fftDbSmoothed = $state(new Float32Array(1));
+  let fftDbInitialized = false;
   let dominants = $state<{ freq: number; mag: number }[]>([]);
 
   function ensureFft() {
@@ -129,35 +130,43 @@
       });
       fftMag = new Float32Array(fft.bins);
       fftDb  = new Float32Array(fft.bins);
-      fftMagSmoothed = new Float32Array(fft.bins);
+      fftDbSmoothed = new Float32Array(fft.bins);
       fftFrame = new Float32Array(fft.size);
+      fftDbInitialized = false;
     }
   }
 
   function computeFft() {
     if (!fft) return;
-    // Use magnitude channel for spectrum
     const src = am;
     const n = Math.min(count, fft.size);
     if (n < 8) return;
     const start = (count >= fft.size) ? count - fft.size : 0;
-    // FftProcessor.compute() takes a Float32Array. Copy from the F64
-    // buffer into our pre-allocated Float32 frame; zero-pad the rest
-    // if we don't yet have a full window of samples.
     fftFrame.fill(0);
     for (let i = 0; i < n; i++) fftFrame[i] = src[start + i];
     fft.compute(fftFrame, fftMag, fftDb);
 
-    // Exponential moving average for damping
+    // EMA smoothing in dB domain. Seed from first frame.
     const α = Math.max(0, Math.min(0.99, $settings.motion.dominantSmoothing));
-    for (let i = 0; i < fftMag.length; i++) {
-      fftMagSmoothed[i] = α * fftMagSmoothed[i] + (1 - α) * fftMag[i];
+    if (!fftDbInitialized) {
+      for (let i = 0; i < fftDb.length; i++) fftDbSmoothed[i] = fftDb[i];
+      fftDbInitialized = true;
+    } else {
+      for (let i = 0; i < fftDb.length; i++) {
+        fftDbSmoothed[i] = α * fftDbSmoothed[i] + (1 - α) * fftDb[i];
+      }
     }
 
+    // Skip DC + near-DC bins when looking for dominants. At 60Hz/1024
+    // bin 1 ≈ 0.058 Hz, which rounded to 1 decimal shows as "0.1 Hz"
+    // or even "0 Hz". Anything below 0.5 Hz on accelerometer data is
+    // gravity drift, not a real spectral peak.
+    const minBin = Math.max(2, Math.ceil(0.5 * fft.size / fft.sampleRate));
     dominants = dominantFrequencies(
-      fftMagSmoothed,
+      fftDbSmoothed,
       fft.freqs,
-      $settings.motion.dominantFreqCount
+      $settings.motion.dominantFreqCount,
+      minBin
     );
   }
 
@@ -245,7 +254,19 @@
 
   function resetKpi() {
     statsM.reset(); statsX.reset(); statsY.reset(); statsZ.reset();
-    fftMagSmoothed.fill(0);
+    // Clear the FFT smoothing state and reseed flag so the next frame
+    // bootstraps fresh values instead of fading from old ones.
+    fftDbSmoothed.fill(0);
+    fftDbInitialized = false;
+    dominants = [];
+    // Clear chart buffers so the time-domain history visibly empties.
+    count = 0;
+    t0 = 0;
+    am.fill(0); ax.fill(0); ay.fill(0); az.fill(0);
+    rx.fill(0); ry.fill(0); rz.fill(0);
+    gx.fill(0); gy.fill(0); gz.fill(0);
+    oa.fill(0); ob.fill(0); og.fill(0);
+    xs.fill(0);
     snapshot();
   }
 
@@ -419,6 +440,7 @@
               {xs} ys={linYs} seriesDefs={linSeries}
               {count} windowSec={$settings.motion.timeWindowSec}
               yLabel="m/s²"
+              smoothingSamples={$settings.global.chartSmoothingSamples}
               fullscreenTitle="Linear acceleration"
             />
           {/key}
@@ -440,6 +462,7 @@
           seriesDefs={[{ label: '|a|', color: 'var(--series-4)' }]}
           {count} windowSec={$settings.motion.timeWindowSec}
           yLabel="m/s²"
+          smoothingSamples={$settings.global.chartSmoothingSamples}
           fullscreenTitle="Magnitude"
         />
       </div>
@@ -461,6 +484,7 @@
           ]}
           {count} windowSec={$settings.motion.timeWindowSec}
           yLabel="rad/s"
+          smoothingSamples={$settings.global.chartSmoothingSamples}
           fullscreenTitle="Gyroscope"
         />
       </div>
@@ -481,7 +505,7 @@
       {#if fft}
         <FftChart
           freqs={fft.freqs}
-          spectra={[fftMagSmoothed]}
+          spectra={[fftDbSmoothed]}
           seriesDefs={[{ label: '|a|', color: 'var(--series-4)' }]}
           logX={$settings.motion.fftFreqLog}
           logY={$settings.motion.fftScaleLog}
@@ -514,7 +538,14 @@
     background: var(--bg-grouped);
     -webkit-overflow-scrolling: touch;
   }
-  .status-strip { display: flex; align-items: center; gap: 8px; padding: 0 16px 12px; }
+  .status-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 16px 6px;
+    font-size: var(--t-footnote);
+    color: var(--fg-tertiary);
+  }
   .banner {
     margin: 8px 16px;
     padding: 12px 16px;
@@ -548,7 +579,7 @@
     min-height: 44px;
   }
   .spacer { flex: 1; }
-  .chart-host { padding: 8px; height: 200px; }
+  .chart-host { padding: 8px; height: 280px; }
   .placeholder {
     display: flex; align-items: center; justify-content: center;
     height: 100%;

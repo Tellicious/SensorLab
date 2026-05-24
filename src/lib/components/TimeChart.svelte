@@ -34,11 +34,14 @@
     yLabel?: string;
     xLabel?: string;
     fullscreenTitle?: string;
+    /** Centered moving-average window in samples. 0 = no smoothing. */
+    smoothingSamples?: number;
   }
   let {
     xs, ys, seriesDefs, count, windowSec,
     yMin, yMax, yLabel = '', xLabel = 's',
-    fullscreenTitle = ''
+    fullscreenTitle = '',
+    smoothingSamples = 0
   }: Props = $props();
 
   let host: HTMLDivElement;
@@ -51,9 +54,24 @@
     const name = c.slice(4, -1).trim();
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
   }
-  // Resolved colors for the inline legend (Svelte template can't call functions
-  // that depend on the DOM during SSR, so we compute them on mount)
   let resolvedColors = $state<string[]>([]);
+
+  /**
+   * Causal moving-average smoothing over `w` samples. Output length = n.
+   * For w<=1 returns the input slice unchanged. The smoothing is per-call
+   * (allocates), but only when the user has explicitly enabled it.
+   */
+  function smooth(src: Float64Array, n: number, w: number): number[] {
+    if (w <= 1 || n === 0) return Array.from(src.subarray(0, n)) as number[];
+    const out = new Array<number>(n);
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      sum += src[i];
+      if (i >= w) sum -= src[i - w];
+      out[i] = sum / Math.min(i + 1, w);
+    }
+    return out;
+  }
 
   function buildSeries(): uPlot.Series[] {
     const arr: uPlot.Series[] = [{}];
@@ -70,9 +88,11 @@
 
   function buildData(): uPlot.AlignedData {
     const n = Math.min(count, xs.length);
-    const x = xs.subarray(0, n);
-    const data: uPlot.AlignedData = [Array.from(x) as number[]];
-    for (const y of ys) data.push(Array.from(y.subarray(0, n)) as number[]);
+    const x = Array.from(xs.subarray(0, n)) as number[];
+    const data: uPlot.AlignedData = [x];
+    for (const y of ys) {
+      data.push(smooth(y, n, smoothingSamples) as unknown as (number | null)[]);
+    }
     return data;
   }
 
@@ -92,8 +112,12 @@
     resolvedColors = seriesDefs.map(d => resolveColor(d.color));
 
     const opts: uPlot.Options = {
-      width: host.clientWidth,
-      height: host.clientHeight,
+      // Use whatever the host currently reports, plus a non-zero floor so
+      // uPlot doesn't initialize at 0×0 (which produces a stuck chart
+      // until something else triggers a setSize). The forceResize() below
+      // fixes it after the first layout pass anyway.
+      width: Math.max(host.clientWidth, 100),
+      height: Math.max(host.clientHeight, 100),
       legend: { show: false },
       cursor: { drag: { x: false, y: false }, points: { show: false } },
       scales: {
@@ -113,6 +137,19 @@
     autoFollow();
   }
 
+  /**
+   * Force uPlot to re-read the host's actual size. iOS Safari's initial
+   * paint sometimes reports 0×0 for flex children during mount, so the
+   * chart appears tiny or invisible until something else triggers a
+   * resize. We schedule this on the next two RAF ticks to catch both
+   * the immediate post-mount state and the post-first-layout state.
+   */
+  function forceResize() {
+    if (!plot || !host) return;
+    const w = host.clientWidth, h = host.clientHeight;
+    if (w > 0 && h > 0) plot.setSize({ width: w, height: h });
+  }
+
   function refresh() {
     if (!plot) return;
     plot.setData(buildData(), false);
@@ -121,13 +158,18 @@
   }
 
   function onResize() {
-    if (!plot || !host) return;
-    plot.setSize({ width: host.clientWidth, height: host.clientHeight });
+    forceResize();
   }
 
   onMount(() => {
     untrack(() => mount());
     rafId = requestAnimationFrame(refresh);
+    // Two RAF ticks after mount, force a resize. iOS Safari can report
+    // host.clientWidth/Height as 0 during the synchronous mount() call,
+    // which strands uPlot at 0×0 until something else triggers a resize
+    // (user scroll, orientation change, etc.). This was the root cause of
+    // "everything out of place at load, need to scroll to fix".
+    requestAnimationFrame(() => requestAnimationFrame(forceResize));
     window.addEventListener('resize', onResize);
     const ro = new ResizeObserver(onResize);
     ro.observe(host);
@@ -166,6 +208,7 @@
     title={fullscreenTitle}
     {xs} {ys} {seriesDefs} {count} {windowSec}
     {yMin} {yMax} {yLabel} {xLabel}
+    {smoothingSamples}
     onClose={() => showFull = false}
   />
 {/if}

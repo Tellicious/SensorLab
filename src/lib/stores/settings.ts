@@ -67,7 +67,6 @@ export interface MotionSettings {
 export interface AudioSettings {
   showWaveform: boolean;
   showSpectrum: boolean;
-  showSpectrogram: boolean;
   waveformWindowMs: 50 | 100 | 500 | 1000;
   fftSize: FftSize;
   fftWindow: WindowName;
@@ -118,6 +117,10 @@ export interface GlobalSettings {
   theme: Theme;
   wakeLock: boolean;
   units: Unit;
+  /** Chart smoothing window in samples (0 = off). Applies a centered
+      moving average to TimeChart series before display. Useful for noisy
+      signals like gyroscope or audio waveforms. */
+  chartSmoothingSamples: number;
 }
 
 export interface AllSettings {
@@ -128,7 +131,7 @@ export interface AllSettings {
 }
 
 export const DEFAULTS: AllSettings = {
-  global: { theme: 'auto', wakeLock: true, units: 'si' },
+  global: { theme: 'auto', wakeLock: true, units: 'si', chartSmoothingSamples: 0 },
   motion: {
     showLinear: true,
     showRaw: false,
@@ -159,7 +162,6 @@ export const DEFAULTS: AllSettings = {
   audio: {
     showWaveform: true,
     showSpectrum: true,
-    showSpectrogram: false,
     waveformWindowMs: 100,
     fftSize: 4096,
     fftWindow: 'hann',

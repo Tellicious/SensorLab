@@ -36,9 +36,25 @@
     document.documentElement.dataset.theme = $settings.global.theme;
     tryAcquireLock();
 
+    // Lock the shell height to the actual visible viewport.
+    // iOS Safari changes the layout viewport when the URL bar appears
+    // and disappears; without compensating the bottom bar appears to
+    // "move" and the initial paint shows content out of place.
+    // window.visualViewport.height is the real visible area in pixels
+    // and we mirror it into a CSS variable that the shell reads.
+    const setViewportHeight = () => {
+      const h = window.visualViewport?.height ?? window.innerHeight;
+      document.documentElement.style.setProperty('--app-height', `${h}px`);
+    };
+    setViewportHeight();
+    window.visualViewport?.addEventListener('resize', setViewportHeight);
+    window.visualViewport?.addEventListener('scroll', setViewportHeight);
+    window.addEventListener('resize', setViewportHeight);
+
     const onVis = () => {
       if (document.visibilityState === 'visible') {
         tryAcquireLock();
+        setViewportHeight();
         if (pauseStartedAt !== null) {
           logSessionEvent('resume', pauseStartedAt);
           pauseStartedAt = null;
@@ -61,6 +77,9 @@
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
+      window.visualViewport?.removeEventListener('resize', setViewportHeight);
+      window.visualViewport?.removeEventListener('scroll', setViewportHeight);
+      window.removeEventListener('resize', setViewportHeight);
       wakeLock?.release().catch(() => {});
     };
   });
@@ -170,17 +189,26 @@
 </div>
 
 <style>
-  /* CRITICAL: position:fixed anchors the shell to the layout viewport.
-     100dvh/100vh on iOS Safari can leave the bottom bar off-screen on
-     first paint, which is the "bar not at the bottom" symptom. */
+  /* The shell is locked to the actual visible viewport, mirrored from
+     window.visualViewport.height into --app-height by the layout's
+     onMount handler. Fallback to 100svh (small viewport) for first paint
+     before JS runs — that's still the smallest possible viewport so the
+     bottom bar will be visible even before the JS measurement lands. */
   .shell {
     position: fixed;
     inset: 0;
+    height: var(--app-height, 100svh);
     display: flex;
     flex-direction: column;
     width: 100%;
     background: var(--bg-grouped);
     overflow: hidden;
+    /* Prevent rubber-band scroll on iOS so the bottom bar doesn't
+       appear to "lift" when the user pulls down. */
+    overscroll-behavior: none;
+    /* Disable double-tap zoom system-wide (we provide our own pinch
+       zoom inside ChartFullscreen). */
+    touch-action: manipulation;
   }
 
   .navbar {

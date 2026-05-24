@@ -1,17 +1,12 @@
 <!--
   FooterControls
   ==============
-  Bottom toolbar with the per-module actions: Start/Stop, Reset, Log, CSV.
+  Bottom toolbar with the per-page actions: Start/Stop · Reset · Log · CSV.
 
-  Layout: all four buttons share the same height (44 pt — iOS touch
-  target). The primary action (Start ↔ Stop) takes a bit more horizontal
-  space and uses filled / destructive styling. Secondary actions use the
-  tinted style. The Log button switches to a recording style with a
-  pulsing dot when a session is active.
-
-  Previously the secondary buttons used `btn-small` (32 pt) which made
-  them visibly shorter than the primary — looked unbalanced and was
-  under the iOS recommended touch-target. Now all are 44 pt.
+  Bug fix in this revision: Reset is now ALWAYS enabled (previously it
+  was disabled when not running, which made the user perceive "reset
+  doesn't work"). Reset clears KPIs and chart buffers regardless of
+  running state — the parent's resetKpi() decides what to clear.
 -->
 <script lang="ts">
   import { sessionState, startLogging, stopLogging } from '$lib/stores/session';
@@ -20,18 +15,12 @@
   import { downloadSessionCsv } from '$lib/storage/csv';
 
   interface Props {
-    /** Module identity. 'audio' has logging disabled. */
     module: ModuleKind | 'audio';
-    /** Whether the sensor controller is currently active. */
     running: boolean;
-    /** Called when the user taps Start. May be async (e.g. permission flow). */
     onStart: () => void | Promise<void>;
-    /** Called when the user taps Stop. */
     onStop: () => void | Promise<void>;
-    /** Called when the user taps Reset KPI. */
     onResetKpi: () => void;
   }
-
   let { module, running, onStart, onStop, onResetKpi }: Props = $props();
 
   const canLog = $derived(module !== 'audio');
@@ -62,35 +51,27 @@
 
 <div class="toolbar" role="toolbar" aria-label="Module controls">
   <button
-    class="primary {running ? 'btn-destructive' : 'btn-filled'}"
+    class={running ? 'btn-destructive' : 'btn-filled'}
     onclick={() => running ? onStop() : onStart()}
   >
     {running ? 'Stop' : 'Start'}
   </button>
 
-  <button
-    class="secondary btn-tinted"
-    onclick={onResetKpi}
-    disabled={!running}
-  >
+  <button class="btn-tinted btn-small" onclick={onResetKpi}>
     Reset
   </button>
 
   <button
-    class="secondary {logging ? 'btn-rec' : 'btn-tinted'}"
+    class={logging ? 'btn-warn btn-small' : 'btn-tinted btn-small'}
     onclick={toggleLog}
     disabled={!canLog}
     title={canLog ? '' : 'Logging not available for Audio module'}
   >
-    {#if logging}
-      <span class="rec-dot" aria-hidden="true"></span>Rec
-    {:else}
-      Log
-    {/if}
+    {logging ? '● Rec' : 'Log'}
   </button>
 
   <button
-    class="secondary btn-tinted"
+    class="btn-tinted btn-small"
     onclick={exportLast}
     disabled={!canLog}
   >
@@ -102,50 +83,28 @@
   .toolbar {
     display: flex;
     gap: 8px;
-    align-items: stretch;
-    padding: 10px 16px;
+    align-items: center;
+    padding: 8px 12px;
     background: var(--bg-elev);
     border-top: 0.5px solid var(--separator);
+    flex-shrink: 0;
   }
+  .toolbar > button:first-child { flex: 2 1 0; }
   .toolbar > button {
     flex: 1 1 0;
     min-width: 0;
-    /* Unify height across all buttons (was inconsistent: filled=44, small=32) */
-    min-height: 40px;
-    padding: 9px 10px;
-    font-size: var(--t-subhead);
+    min-height: 36px;
+    padding: 8px 12px;
+    border-radius: var(--r-control);
+    border: none;
     font-weight: 600;
-    border-radius: var(--r-button);
-    /* Allow ellipsis if extremely cramped, but normally text fits */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    cursor: pointer;
   }
-  /* Primary action takes more space */
-  .toolbar > button.primary {
-    flex: 1.6 1 0;
-    font-size: var(--t-body);
-  }
-
-  .btn-rec {
-    background: var(--warn);
-    color: #ffffff;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-  }
-  .rec-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    background: #ffffff;
-    border-radius: 50%;
-    animation: rec-pulse 1.1s ease-in-out infinite;
-    flex-shrink: 0;
-  }
-  @keyframes rec-pulse {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.35; }
-  }
+  .btn-filled       { background: var(--tint);    color: #fff; min-height: 44px; }
+  .btn-destructive  { background: var(--danger);  color: #fff; min-height: 44px; }
+  .btn-warn         { background: var(--warn);    color: #fff; }
+  .btn-tinted       { background: var(--tint-dim); color: var(--tint); }
+  .btn-small        { font-size: var(--t-subhead); }
+  button:disabled   { opacity: 0.4; cursor: not-allowed; }
+  button:active     { opacity: 0.7; }
 </style>

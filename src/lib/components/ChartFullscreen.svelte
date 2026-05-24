@@ -33,6 +33,7 @@
     count?: number;
     windowSec?: number;
     xLabel?: string;
+    smoothingSamples?: number;
     // FFT-chart fields
     freqs?: Float32Array;
     spectra?: Float32Array[];
@@ -50,6 +51,7 @@
     kind,
     title = '',
     xs, ys, count, windowSec, xLabel = 's',
+    smoothingSamples = 0,
     freqs, spectra, logX, logY, autoScale, seriesDefs,
     yMin, yMax, yLabel = '',
     onClose
@@ -85,7 +87,21 @@
       const n = count ?? xs?.length ?? 0;
       const xArr = xs?.subarray(0, n) ?? new Float64Array(0);
       const data: uPlot.AlignedData = [Array.from(xArr)];
-      for (const y of ys ?? []) data.push(Array.from(y.subarray(0, n)) as number[]);
+      const w = smoothingSamples ?? 0;
+      for (const y of ys ?? []) {
+        if (w > 1 && n > 0) {
+          const out = new Array<number>(n);
+          let sum = 0;
+          for (let i = 0; i < n; i++) {
+            sum += y[i];
+            if (i >= w) sum -= y[i - w];
+            out[i] = sum / Math.min(i + 1, w);
+          }
+          data.push(out as unknown as (number | null)[]);
+        } else {
+          data.push(Array.from(y.subarray(0, n)) as number[]);
+        }
+      }
       return data;
     } else {
       const f = freqs ?? new Float32Array(0);
@@ -259,11 +275,11 @@
 
 <div class="overlay" role="dialog" aria-modal="true" aria-label="Full-screen chart">
   <header class="fs-head">
+    <button class="reset-btn" onclick={resetZoom} aria-label="Reset zoom">Reset</button>
     <span class="fs-title">{title}</span>
     <span class="spacer"></span>
     <span class="live-pill" class:on={live}>{live ? '● LIVE' : 'PAUSED'}</span>
-    <button class="fs-btn" onclick={resetZoom} aria-label="Reset zoom">Reset</button>
-    <button class="fs-btn close-btn" onclick={onClose} aria-label="Close">✕</button>
+    <button class="done-btn" onclick={onClose} aria-label="Close full-screen">Done</button>
   </header>
   <div
     class="fs-host"
@@ -292,12 +308,14 @@
     display: flex; align-items: center; gap: 8px;
     padding: 8px 12px;
     border-bottom: 0.5px solid var(--separator);
-    min-height: 48px;
+    min-height: 56px;
+    background: var(--bg-elev);
   }
   .fs-title {
     font-size: var(--t-headline);
     font-weight: 600;
     color: var(--fg);
+    margin-left: 4px;
   }
   .spacer { flex: 1; }
   .live-pill {
@@ -313,23 +331,32 @@
     background: var(--success-dim, rgba(52, 199, 89, 0.2));
     color: var(--success, #34c759);
   }
-  .fs-btn {
-    min-height: 36px;
-    padding: 6px 12px;
-    background: var(--fill-tertiary);
-    color: var(--fg);
+  .reset-btn {
+    min-height: 44px;
+    min-width: 60px;
+    padding: 8px 14px;
+    background: transparent;
+    color: var(--tint);
     border: none;
     border-radius: var(--r-control);
     font-size: var(--t-body);
     font-weight: 500;
     cursor: pointer;
   }
-  .close-btn {
-    width: 36px; height: 36px;
-    padding: 0;
-    border-radius: 50%;
-    background: var(--fill-tertiary);
+  .done-btn {
+    /* iOS standard "Done" button: prominent tint-filled pill */
+    min-height: 44px;
+    min-width: 72px;
+    padding: 8px 18px;
+    background: var(--tint);
+    color: #ffffff;
+    border: none;
+    border-radius: var(--r-control);
+    font-size: var(--t-body);
+    font-weight: 600;
+    cursor: pointer;
   }
+  .reset-btn:active, .done-btn:active { opacity: 0.7; }
   .fs-host {
     flex: 1;
     width: 100%;

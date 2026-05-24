@@ -56,7 +56,9 @@
       timeBuf  = new Float32Array(fftSize);
       timeBufF64 = new Float64Array(fftSize);
       timeXs   = new Float64Array(fftSize);
-      for (let i = 0; i < fftSize; i++) timeXs[i] = (i / sr) * 1000;
+      // X axis in SECONDS (was ms, which mismatched the windowSec
+      // prop passed to TimeChart and made the waveform invisible).
+      for (let i = 0; i < fftSize; i++) timeXs[i] = i / sr;
     }
     const bins = Math.floor(fftSize / 2) + 1;
     if (dbRaw.length !== bins) {
@@ -66,6 +68,10 @@
       freqs = new Float32Array(bins);
       for (let i = 0; i < bins; i++) freqs[i] = (i * sr) / fftSize;
       weightOff = weightingOffsets(freqs, $settings.audio.weighting);
+      // Mark dbSmoothed as "not yet initialized" so the first loop
+      // iteration seeds it from dbWeighted rather than averaging 0
+      // toward -120 over many iterations.
+      smoothedInitialized = false;
     }
   }
 
@@ -80,6 +86,9 @@
   let rmsTracker = new RollingRms(48000, 1);
   let leqSum = 0, leqCount = 0;
   let tick = $state(0);
+  // Tracks whether dbSmoothed has been seeded with real data yet
+  // (so the EMA doesn't drag from 0 toward -120 over many seconds).
+  let smoothedInitialized = false;
 
   const calOffset = $derived($settings.audio.calibration.offsetDb);
   const peakDbFS  = $derived.by(() => { void tick; return peakTracker.peak > 0 ? 20 * Math.log10(peakTracker.peak) : -Infinity; });
@@ -130,12 +139,21 @@
     }
     if (pCount > 0) { leqSum += pSum / pCount; leqCount++; }
 
-    // EMA smoothing for damped dominants
+    // EMA smoothing for damped dominants. Seed from first frame so
+    // we don't take many seconds to converge from 0 toward -120.
     const α = Math.max(0, Math.min(0.99, $settings.audio.dominantSmoothing));
-    for (let i = 0; i < dbWeighted.length; i++) {
-      dbSmoothed[i] = α * dbSmoothed[i] + (1 - α) * dbWeighted[i];
+    if (!smoothedInitialized) {
+      for (let i = 0; i < dbWeighted.length; i++) dbSmoothed[i] = dbWeighted[i];
+      smoothedInitialized = true;
+    } else {
+      for (let i = 0; i < dbWeighted.length; i++) {
+        dbSmoothed[i] = α * dbSmoothed[i] + (1 - α) * dbWeighted[i];
+      }
     }
-    dominants = dominantFrequencies(dbSmoothed, freqs, $settings.audio.dominantFreqCount);
+    // Skip bins below 20 Hz when searching for dominants — anything
+    // lower is sub-audible / DC drift, not a meaningful audio peak.
+    const minBin = Math.max(2, Math.ceil(20 * dbSmoothed.length * 2 / sampleRate));
+    dominants = dominantFrequencies(dbSmoothed, freqs, $settings.audio.dominantFreqCount, minBin);
 
     // Note: audio is visualization-only by design — no logging to IndexedDB.
     // Raw audio at 48 kHz would saturate the storage quota in minutes.
@@ -158,6 +176,7 @@
       rmsTracker = new RollingRms(sampleRate, $settings.audio.rmsWindowSec);
       leqSum = 0; leqCount = 0;
       dbSmoothed.fill(0);
+      smoothedInitialized = false;
       loop();
     } catch (e) {
       permError = (e as Error).message || 'Microphone access failed';
@@ -245,7 +264,8 @@
             windowSec={$settings.audio.waveformWindowMs / 1000}
             yMin={-1} yMax={1}
             yLabel=""
-            xLabel="ms"
+            xLabel="s"
+            smoothingSamples={$settings.global.chartSmoothingSamples}
             fullscreenTitle="Audio waveform"
           />
         {:else}
@@ -304,7 +324,14 @@
     background: var(--bg-grouped);
     -webkit-overflow-scrolling: touch;
   }
-  .status-strip { display: flex; align-items: center; gap: 8px; padding: 0 16px 12px; }
+  .status-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 16px 6px;
+    font-size: var(--t-footnote);
+    color: var(--fg-tertiary);
+  }
   .banner {
     margin: 8px 16px;
     padding: 12px 16px;
@@ -338,7 +365,7 @@
     min-height: 44px;
   }
   .spacer { flex: 1; }
-  .chart-host { padding: 8px; height: 200px; }
+  .chart-host { padding: 8px; height: 280px; }
   .placeholder {
     display: flex; align-items: center; justify-content: center;
     height: 100%;

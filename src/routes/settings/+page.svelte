@@ -111,6 +111,25 @@
         <option value="imperial">Imperial</option>
       </select>
     </label>
+    <label class="list-row">
+      <span class="list-row-label">
+        Chart smoothing
+        <span class="footnote" style="display:block; color: var(--fg-tertiary)">
+          Moving-average over N samples · 0 = off
+        </span>
+      </span>
+      <input
+        class="num-input"
+        type="number"
+        inputmode="numeric"
+        min="0" max="50" step="1"
+        value={$settings.global.chartSmoothingSamples}
+        oninput={(e) => {
+          const v = Math.max(0, Math.min(50, Math.round(+(e.currentTarget as HTMLInputElement).value || 0)));
+          updateGlobal({ chartSmoothingSamples: v });
+        }}
+      />
+    </label>
   </section>
 
   <!-- MOTION channels -->
@@ -236,8 +255,7 @@
   <section class="list-group">
     {#each [
       { k: 'showWaveform', l: 'Waveform' },
-      { k: 'showSpectrum', l: 'Spectrum' },
-      { k: 'showSpectrogram', l: 'Spectrogram' }
+      { k: 'showSpectrum', l: 'Spectrum' }
     ] as t}
       <label class="list-row">
         <span class="list-row-label">{t.l}</span>
@@ -585,4 +603,17 @@
   }
   .ios-toggle.on .track { background: var(--success); }
   .ios-toggle.on .knob { transform: translateX(20px); }
+  .num-input {
+    width: 64px;
+    min-height: 32px;
+    padding: 6px 10px;
+    background: var(--fill-tertiary);
+    color: var(--fg);
+    border: none;
+    border-radius: var(--r-control);
+    font: inherit;
+    text-align: right;
+    /* iOS: prevent auto-zoom on focus (font-size < 16 triggers zoom) */
+    font-size: 16px;
+  }
 </style>

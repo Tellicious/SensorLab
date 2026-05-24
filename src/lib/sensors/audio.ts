@@ -38,6 +38,7 @@ export async function createAudioController(fftSize: number): Promise<AudioContr
   let stream: MediaStream | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
   let analyser: AnalyserNode | null = null;
+  let sink: GainNode | null = null;
   let started = false;
 
   return {
@@ -77,7 +78,20 @@ export async function createAudioController(fftSize: number): Promise<AudioContr
       analyser.smoothingTimeConstant = 0;  // we smooth ourselves where wanted
       analyser.minDecibels = -120;
       analyser.maxDecibels = 0;
+
+      // iOS Safari requires the audio graph to reach destination for the
+      // AnalyserNode to actually process incoming samples. We never want
+      // the mic to play back through the speakers (it would feed back
+      // instantly), so we route through a muted GainNode.
+      // Without this sink the entire audio page (waveform + spectrum +
+      // dominants + KPIs) stays empty on iOS, which was the root cause
+      // of the user-reported "Audio not working at all" symptom.
+      sink = ctx.createGain();
+      sink.gain.value = 0;
+
       source.connect(analyser);
+      analyser.connect(sink);
+      sink.connect(ctx.destination);
       started = true;
     },
 
@@ -85,9 +99,10 @@ export async function createAudioController(fftSize: number): Promise<AudioContr
       started = false;
       try { source?.disconnect(); } catch { /* */ }
       try { analyser?.disconnect(); } catch { /* */ }
+      try { sink?.disconnect(); } catch { /* */ }
       try { stream?.getTracks().forEach(t => t.stop()); } catch { /* */ }
       try { ctx?.close(); } catch { /* */ }
-      source = null; analyser = null; stream = null; ctx = null;
+      source = null; analyser = null; sink = null; stream = null; ctx = null;
     },
 
     getTimeDomain(out: Float32Array) {
